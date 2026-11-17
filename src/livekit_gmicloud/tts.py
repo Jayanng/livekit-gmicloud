@@ -315,6 +315,15 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         if not self._input_text.strip():
+            # Nothing to synthesize: complete the stream as a clean zero-audio
+            # segment. The emitter must still be initialized (the base class
+            # ends it after _run); event consumers see a no-op.
+            output_emitter.initialize(
+                request_id=utils.shortuuid(),
+                sample_rate=self._tts.sample_rate,
+                num_channels=1,
+                mime_type="audio/wav",
+            )
             return
 
         # may raise ValueError (e.g. Chatterbox without a voice_uuid) — a

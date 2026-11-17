@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1 (2026-11-17)
+
+- Empty input text now completes as a clean zero-audio segment (a no-op in
+  AgentSession event consumption) instead of raising an internal
+  `AudioEmitter` RuntimeError.
+
 ## 0.1.0 (2026-11-17)
 
 Initial release.

@@ -125,9 +125,9 @@ Observed while measuring:
 - `minimax-tts-speech-2.8-turbo` returns `dispatched`/`processing` and is
   resolved through the queued-request polling path. This path is
   intermittent on GMI Cloud: in our live calls most MiniMax requests returned
-  audio (typically within a minute), while one stayed `processing` past the
-  3-minute default poll budget, in which case `synthesize()` raises a clear
-  error. Queued MiniMax generation is slow on GMI Cloud, so raise
+  audio (typically within a minute), while an occasional request stays
+  `processing` past the 3-minute default poll budget, in which case
+  `synthesize()` raises a clear error. Queued MiniMax generation is slow on GMI Cloud, so raise
   `poll_attempts` / `poll_interval_secs` for slow generations, or prefer the
   Inworld family for latency-sensitive voice agents.
 - `Chatterbox-tts` without a `voice_uuid` is rejected with a clear
@@ -145,6 +145,8 @@ Observed while measuring:
   (same GMI Cloud request-queue endpoint and response resolution).
 - Synthesis is chunked (non-streaming): each `synthesize()` call returns one
   completed WAV. Streaming (`TTS.stream()`) is not implemented.
+- Empty input text completes as a clean zero-audio segment (a no-op in an
+  `AgentSession`).
 
 ## Attribution
 
