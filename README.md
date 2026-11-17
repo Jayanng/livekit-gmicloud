@@ -104,6 +104,11 @@ to the Inworld request shape.
 | `minimax-tts-speech-2.8-turbo` | MiniMax | `voice_id`, `speed`, `format`, plus `extra_payload`; may return queued/dispatched (polled) |
 | `Chatterbox-tts` | Chatterbox | requires a Resemble `voice_uuid` as `voice` |
 
+## Demo
+
+A 29-second live demo (test suite, live synthesis with output normalization,
+cancellation handling): https://github.com/Jayanng/livekit-gmicloud/blob/main/assets/demo.mp4
+
 ## Measured results
 
 Measured 2026-11-17 against the live GMI Cloud API through
