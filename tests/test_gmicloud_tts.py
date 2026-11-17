@@ -145,3 +145,143 @@ def test_extra_payload_merged_last():
 def test_extra_payload_can_override():
     payload = build_payload("hi", _opts(extra_payload={"voice_id": "Override"}))
     assert payload["voice_id"] == "Override"
+
+
+# --- audio URL extraction ---------------------------------------------------
+
+def test_extract_audio_url_direct():
+    from livekit_gmicloud.tts import _extract_audio_url
+    assert _extract_audio_url({"outcome": {"audio_url": "https://a/x.wav"}}) == "https://a/x.wav"
+
+
+def test_extract_audio_url_media_urls_list():
+    from livekit_gmicloud.tts import _extract_audio_url
+    data = {"outcome": {"media_urls": [{"url": "https://a/1.wav"}]}}
+    assert _extract_audio_url(data) == "https://a/1.wav"
+
+
+def test_extract_audio_url_medias_and_media_keys():
+    from livekit_gmicloud.tts import _extract_audio_url
+    assert _extract_audio_url({"outcome": {"medias": [{"url": "https://a/2.wav"}]}}) == "https://a/2.wav"
+    assert _extract_audio_url({"outcome": {"media": [{"url": "https://a/3.wav"}]}}) == "https://a/3.wav"
+
+
+def test_extract_audio_url_missing():
+    from livekit_gmicloud.tts import _extract_audio_url
+    assert _extract_audio_url({}) is None
+    assert _extract_audio_url({"outcome": {}}) is None
+    assert _extract_audio_url({"outcome": "not-a-dict"}) is None
+
+
+# --- WAV header parsing -----------------------------------------------------
+
+def test_wav_info_reads_header():
+    import io, wave
+    from livekit_gmicloud.tts import _wav_info
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(32000)
+        w.writeframes(b"\x00\x00" * 32000)
+    assert _wav_info(buf.getvalue()) == (32000, 2)
+
+
+def test_wav_info_garbage_returns_zero():
+    from livekit_gmicloud.tts import _wav_info
+    assert _wav_info(b"not a wav at all") == (0, 0)
+
+
+# --- response resolution: sync vs queued ------------------------------------
+
+class _FakeResp:
+    def __init__(self, status, payload):
+        self.status = status
+        self._payload = payload
+
+    async def json(self, content_type=None):
+        return self._payload
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _FakeSession:
+    """Records GET calls and replays canned JSON responses."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls = 0
+
+    def get(self, url, **kwargs):
+        self.calls += 1
+        return _FakeResp(200, self._responses.pop(0))
+
+
+def _stream(**opts):
+    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
+    from livekit_gmicloud.tts import ChunkedStream, TTS
+    tts = TTS(api_key="test-key", poll_interval_secs=0.001, poll_attempts=3, **opts)
+    return ChunkedStream(tts=tts, input_text="hello", conn_options=DEFAULT_API_CONNECT_OPTIONS)
+
+
+@pytest.mark.asyncio
+async def test_resolve_result_sync_success_no_polling():
+    cs = _stream()
+    session = _FakeSession([])
+    data = {"status": "success", "outcome": {"audio_url": "https://a/x.wav"}}
+    out, url = await cs._resolve_result(session, data)
+    assert url == "https://a/x.wav"
+    assert session.calls == 0  # synchronous: nothing polled
+
+
+@pytest.mark.asyncio
+async def test_resolve_result_queued_is_polled_to_success():
+    cs = _stream()
+    session = _FakeSession([
+        {"status": "processing", "request_id": "r1"},
+        {"status": "success", "request_id": "r1", "outcome": {"audio_url": "https://a/x.wav"}},
+    ])
+    data = {"status": "dispatched", "request_id": "r1"}
+    out, url = await cs._resolve_result(session, data)
+    assert url == "https://a/x.wav"
+    assert out.get("status") == "success"
+    assert session.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_resolve_result_poll_timeout_returns_no_url():
+    cs = _stream()
+    session = _FakeSession([
+        {"status": "processing", "request_id": "r1"},
+        {"status": "processing", "request_id": "r1"},
+        {"status": "processing", "request_id": "r1"},
+    ])
+    data = {"status": "dispatched", "request_id": "r1"}
+    out, url = await cs._resolve_result(session, data)
+    assert url is None
+    assert session.calls == 3  # poll_attempts exhausted
+
+
+@pytest.mark.asyncio
+async def test_resolve_result_failed_status_never_polls():
+    cs = _stream()
+    session = _FakeSession([])
+    data = {"status": "failed", "request_id": "r1"}
+    out, url = await cs._resolve_result(session, data)
+    assert url is None
+    assert session.calls == 0
+
+
+# --- session fallback error path --------------------------------------------
+
+def test_missing_session_outside_job_context_raises_clear_error():
+    import pytest
+    from livekit.agents import APIConnectionError
+    from livekit_gmicloud.tts import TTS
+    tts = TTS(api_key="test-key")  # no http_session, no job context in pytest
+    with pytest.raises(APIConnectionError, match="http_session"):
+        tts._ensure_session()

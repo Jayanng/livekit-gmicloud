@@ -217,7 +217,9 @@ class TTS(tts.TTS):
                 queued MiniMax generations can stay ``processing`` for
                 minutes).
             http_session: An existing aiohttp ClientSession to use. If not
-                provided, the LiveKit Agents HTTP context session is used.
+                provided, the LiveKit Agents job-context session is used;
+                outside an agent worker (standalone scripts) you must pass
+                your own session or synthesis raises an error.
 
         Raises:
             ValueError: If no API key is available.
@@ -260,7 +262,15 @@ class TTS(tts.TTS):
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
-            self._session = utils.http_context.http_session()
+            try:
+                self._session = utils.http_context.http_session()
+            except RuntimeError as e:
+                raise APIConnectionError(
+                    "No aiohttp session available. Inside an AgentSession the "
+                    "LiveKit Agents job-context session is used automatically; "
+                    "outside an agent worker, pass http_session= to "
+                    "livekit_gmicloud.TTS."
+                ) from e
         return self._session
 
     def synthesize(
@@ -394,4 +404,5 @@ class ChunkedStream(tts.ChunkedStream):
         )
         output_emitter.push(wav_bytes)
         output_emitter.flush()
-        output_emitter.end_input()
+        # end_input() is called by tts.ChunkedStream after _run returns
+        # (same contract as the livekit-plugins-minimax ChunkedStream)
