@@ -25,6 +25,7 @@ classifiers = [
 dependencies = [
     "livekit-agents[codecs]>=1.8.12",
     "aiohttp>=3.9",
+    "livekit",
 ]
 
 [tool.hatch.version]

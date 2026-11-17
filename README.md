@@ -36,9 +36,10 @@ tts = TTS(
     temperature=None,            # Inworld family only
     timestamp_type=None,         # Inworld family only (e.g. "WORD")
     extra_payload=None,          # provider-specific fields, passed through
-    audio_format="WAV",          # output container requested from GMI Cloud
-    sample_rate=48000,           # nominal; emitted audio uses the rate of the
-                                 # WAV returned by the model (read at runtime)
+    audio_format="WAV",          # only "WAV" is supported (others rejected)
+    sample_rate=48000,           # emitted audio is normalized to this rate
+                                 # (mono); GMI responses are down-mixed and
+                                 # resampled to match
     api_key=None,                # or GMI_CLOUD_API_KEY / GMI_API_KEY env var
     base_url="https://console.gmicloud.ai",
     poll_interval_secs=2.0,      # polling interval for queued responses
@@ -117,8 +118,12 @@ measured sample, not fixed values.
 
 | Model | Family | Output WAV bytes | Sample rate | Channels | Duration |
 | --- | --- | --- | --- | --- | --- |
-| `inworld-tts-2` | Inworld | 493,484 | 48000 Hz | 1 (mono) | 5.14 s |
-| `minimax-tts-speech-2.8-turbo` | MiniMax | 742,684 | 32000 Hz | 2 (stereo) | 5.80 s |
+| `inworld-tts-2` | Inworld | 513,644 | 48000 Hz | 1 (mono) | 5.35 s |
+| `minimax-tts-speech-2.8-turbo` | MiniMax | 528,348 | 48000 Hz | 1 (mono) | 5.50 s |
+
+Output is normalized to the declared format (mono at `sample_rate`, 48 kHz by
+default), so both rows share that format; GMI Cloud's raw per-model formats
+are noted below.
 
 Observed while measuring:
 
@@ -133,9 +138,10 @@ Observed while measuring:
 - `Chatterbox-tts` without a `voice_uuid` is rejected with a clear
   `ValueError` before any audio is requested (verified live).
 - GMI Cloud returns WAV at the model's native rate/channels (Inworld 48 kHz
-  mono; MiniMax 32 kHz stereo in every successful MiniMax run); the
-  plugin reads the real sample rate and channel count from each WAV header
-  and emits audio frames at that format.
+  mono; MiniMax 32 kHz stereo). The plugin normalizes every response to its
+  declared format (mono at `sample_rate`): multi-channel audio is down-mixed
+  and resampled before being emitted, so emitted frames always match
+  `TTS.sample_rate` / `TTS.num_channels`.
 
 ## Compatibility
 

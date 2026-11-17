@@ -175,21 +175,23 @@ def test_extract_audio_url_missing():
 
 # --- WAV header parsing -----------------------------------------------------
 
-def test_wav_info_reads_header():
+def test_parse_wav_reads_payload_and_header():
     import io, wave
-    from livekit_gmicloud.tts import _wav_info
+    from livekit_gmicloud.tts import _parse_wav
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
         w.setnchannels(2)
         w.setsampwidth(2)
         w.setframerate(32000)
         w.writeframes(b"\x00\x00" * 32000)
-    assert _wav_info(buf.getvalue()) == (32000, 2)
+    pcm, rate, channels, width = _parse_wav(buf.getvalue())
+    assert (rate, channels, width) == (32000, 2, 2)
+    assert len(pcm) == 32000 * 2
 
 
-def test_wav_info_garbage_returns_zero():
-    from livekit_gmicloud.tts import _wav_info
-    assert _wav_info(b"not a wav at all") == (0, 0)
+def test_parse_wav_garbage_returns_none():
+    from livekit_gmicloud.tts import _parse_wav
+    assert _parse_wav(b"not a wav at all") is None
 
 
 # --- response resolution: sync vs queued ------------------------------------
@@ -201,6 +203,9 @@ class _FakeResp:
 
     async def json(self, content_type=None):
         return self._payload
+
+    async def text(self):
+        return "err"
 
     async def __aenter__(self):
         return self
@@ -285,3 +290,99 @@ def test_missing_session_outside_job_context_raises_clear_error():
     tts = TTS(api_key="test-key")  # no http_session, no job context in pytest
     with pytest.raises(APIConnectionError, match="http_session"):
         tts._ensure_session()
+
+
+# --- output normalization (declared-format contract) -------------------------
+
+def test_to_mono_s16_downmixes_by_averaging():
+    import struct
+    from livekit_gmicloud.tts import _to_mono_s16
+    stereo = struct.pack("<4h", 1000, 3000, 2000, 4000)
+    assert struct.unpack("<2h", _to_mono_s16(stereo, 2)) == (2000, 3000)
+
+
+def test_to_mono_s16_passthrough_mono():
+    from livekit_gmicloud.tts import _to_mono_s16
+    mono = b"\x01\x00" * 100
+    assert _to_mono_s16(mono, 1) == mono
+
+
+def test_resample_s16_32k_to_48k():
+    from livekit_gmicloud.tts import _resample_s16
+    pcm = b"\x01\x00" * 32000
+    out = _resample_s16(pcm, 32000, 48000)
+    assert 47900 <= len(out) // 2 <= 48100
+
+
+def test_wrap_wav_s16_roundtrip():
+    from livekit_gmicloud.tts import _parse_wav, _wrap_wav_s16
+    pcm = b"\x01\x00" * 500
+    parsed = _parse_wav(_wrap_wav_s16(pcm, 48000))
+    assert parsed == (pcm, 48000, 1, 2)
+
+
+def test_non_wav_audio_format_rejected():
+    import pytest
+    from livekit_gmicloud.tts import TTS
+    with pytest.raises(ValueError, match="WAV"):
+        TTS(model="inworld-tts-2", api_key="k", audio_format="MP3")
+
+
+# --- queue polling error handling -------------------------------------------
+
+class _PollResp:
+    def __init__(self, status, payload):
+        self.status = status
+        self._payload = payload
+
+    async def json(self, content_type=None):
+        return self._payload
+
+    async def text(self):
+        return "err"
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _PollSession:
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls = 0
+
+    def get(self, url, **kwargs):
+        self.calls += 1
+        status, payload = self._responses.pop(0)
+        return _PollResp(status, payload)
+
+
+async def test_poll_permanent_error_raises_immediately():
+    import pytest
+    from livekit.agents import APIStatusError
+    cs = _stream()
+    session = _PollSession([(401, {})])
+    with pytest.raises(APIStatusError) as exc:
+        await cs._resolve_result(session, {"status": "dispatched", "request_id": "r"})
+    assert exc.value.status_code == 401
+    assert session.calls == 1
+
+
+async def test_poll_transient_retries_to_budget():
+    cs = _stream()
+    session = _PollSession([(503, {}), (503, {}), (503, {})])
+    _, url = await cs._resolve_result(session, {"status": "dispatched", "request_id": "r"})
+    assert url is None
+    assert session.calls == 3
+
+
+async def test_poll_rate_limit_then_success():
+    cs = _stream()
+    session = _PollSession([
+        (429, {}),
+        (200, {"status": "success", "request_id": "r", "outcome": {"audio_url": "https://a/x.wav"}}),
+    ])
+    _, url = await cs._resolve_result(session, {"status": "dispatched", "request_id": "r"})
+    assert url == "https://a/x.wav"
