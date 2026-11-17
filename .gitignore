@@ -1,0 +1,15 @@
+# test artifacts (the README records the measured numbers)
+scripts/out/
+*.wav
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+dist/
+build/
+
+# env / secrets
+.env
